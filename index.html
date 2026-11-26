@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>aurora-devworks</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background-color: #050811;
+    color: #ffffff;
+    font-family: system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  #aurora-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    display: block;
+  }
+
+  .content {
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    padding: 2rem;
+    text-align: center;
+  }
+
+  .card {
+    background: rgba(8, 12, 24, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(8px);
+    padding: 2rem 3rem;
+    border-radius: 14px;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="aurora-canvas"></canvas>
+
+<main class="content">
+  <div class="card">
+    <h1>aurora-devworks</h1>
+    <p>a place where i like to put my silly code in</p>
+  </div>
+</main>
+
+<script>
+const canvas = document.getElementById('aurora-canvas');
+const gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+
+const vertexShaderSource = `
+  attribute vec2 a_position;
+  void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+  }
+`;
+
+const fragmentShaderSource = `
+  precision highp float;
+
+  uniform vec2 u_resolution;
+  uniform float u_time;
+
+  float hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+  }
+
+  float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+
+  float auroraRays(float x, float t) {
+    float n = 0.0;
+    n += noise(vec2(x * 14.0 + t * 0.25, t * 0.12)) * 0.50;
+    n += noise(vec2(x * 32.0 - t * 0.40, t * 0.20)) * 0.30;
+    n += noise(vec2(x * 75.0 + t * 0.65, t * 0.30)) * 0.20;
+    return smoothstep(0.22, 0.88, n);
+  }
+
+  void main() {
+    vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+    float aspect = u_resolution.x / u_resolution.y;
+    float t = u_time * 0.65;
+
+    // 1. Deep night sky gradient
+    vec3 skyTop = vec3(0.02, 0.035, 0.08);
+    vec3 skyHorizon = vec3(0.05, 0.09, 0.16);
+    vec3 color = mix(skyHorizon, skyTop, pow(uv.y, 0.7));
+
+    // 2. Full-page starfield with independent twinkling (-40% brightness)
+    vec2 starGrid = floor(uv * vec2(280.0 * aspect, 280.0));
+    float starSeed = hash(starGrid);
+    if (starSeed > 0.993) {
+      vec2 starCenter = (starGrid + 0.5) / vec2(280.0 * aspect, 280.0);
+      float dist = length((uv - starCenter) * vec2(aspect, 1.0));
+
+      bool isPulsing = (starSeed > 0.997);
+      float twinkle = isPulsing
+        ? (0.75 + 0.25 * sin(u_time * 1.8 + starSeed * 62.8))
+        : (0.35 + 0.15 * sin(u_time * 0.8 + starSeed * 31.4));
+
+      float star = smoothstep(0.002, 0.0, dist) * twinkle * 0.6;
+      color += vec3(0.85, 0.92, 1.0) * star;
+    }
+
+    // 3. Curved magnetic field tilt
+    float slant = (uv.y - 0.15) * 0.14 * sin(uv.x * 2.5 - 0.5);
+    float rayCoord = uv.x + slant;
+
+    // 4. Sweeping S-curve ribbon wave positioned closer to the bottom
+    float wave1 = sin(uv.x * 4.2 + t * 0.45) * 0.06
+                + cos(uv.x * 7.5 - t * 0.30) * 0.025
+                + noise(vec2(uv.x * 2.5 + t * 0.15, t * 0.1)) * 0.05;
+
+    // Lowered base line down toward the bottom of the viewport
+    float baseLine = 0.08 + smoothstep(0.35, 0.95, uv.x) * 0.08 + wave1;
+    float heightAbove = uv.y - baseLine;
+
+    // Smooth lower boundary mask so it fades out cleanly at the bottom edge instead of cutting off
+    float bottomEdge = smoothstep(-0.08, 0.04, heightAbove);
+    float topFade = exp(-max(heightAbove, 0.0) * 2.5);
+    float verticalMask = bottomEdge * topFade;
+
+    float wave2 = cos(uv.x * 3.6 - t * 0.35) * 0.07 + 0.14;
+    float heightAbove2 = uv.y - wave2;
+    float verticalMask2 = smoothstep(-0.08, 0.04, heightAbove2) * exp(-max(heightAbove2, 0.0) * 2.2);
+
+    // 5. High-frequency vertical light beams
+    float beams1 = auroraRays(rayCoord, t);
+    float beams2 = auroraRays(rayCoord * 1.15 + 3.7, -t * 0.8);
+
+    float curtainBreak1 = smoothstep(0.15, 0.75, noise(vec2(uv.x * 3.2 - t * 0.18, 1.5)));
+    float curtainBreak2 = smoothstep(0.20, 0.80, noise(vec2(uv.x * 2.6 + t * 0.14, 4.2)));
+
+    float intensity1 = verticalMask * (0.35 + 0.95 * beams1) * curtainBreak1;
+    float intensity2 = verticalMask2 * (0.25 + 0.85 * beams2) * curtainBreak2 * 0.65;
+
+    // 6. Color palette (Green core -> Pink -> Violet top)
+    vec3 emeraldGreen = vec3(0.18, 0.96, 0.42);
+    vec3 paleMint     = vec3(0.65, 1.00, 0.72);
+    vec3 coralPink    = vec3(0.95, 0.36, 0.62);
+    vec3 deepViolet   = vec3(0.55, 0.18, 0.92);
+
+    float violetZone = smoothstep(0.55, 0.12, uv.x);
+    float altitude = clamp(heightAbove * 1.8, 0.0, 1.0);
+
+    vec3 ribbonColor = mix(emeraldGreen, paleMint, smoothstep(0.02, 0.0, abs(heightAbove - 0.015)) * 0.5);
+    ribbonColor = mix(ribbonColor, coralPink, smoothstep(0.15, 0.58, altitude + violetZone * 0.35));
+    ribbonColor = mix(ribbonColor, deepViolet, smoothstep(0.45, 0.95, altitude + violetZone * 0.45));
+
+    vec3 backColor = mix(emeraldGreen, deepViolet, clamp(heightAbove2 * 2.0 + 0.3, 0.0, 1.0));
+
+    color += ribbonColor * intensity1 * 1.15;
+    color += backColor * intensity2;
+    color += emeraldGreen * exp(-abs(heightAbove) * 7.0) * curtainBreak1 * 0.22;
+
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+function compileShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compileShader(gl.VERTEX_SHADER, vertexShaderSource));
+gl.attachShader(program, compileShader(gl.FRAGMENT_SHADER, fragmentShaderSource));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+  -1, -1,  1, -1, -1,  1,
+  -1,  1,  1, -1,  1,  1
+]), gl.STATIC_DRAW);
+
+const positionLoc = gl.getAttribLocation(program, 'a_position');
+gl.enableVertexAttribArray(positionLoc);
+gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+
+const resLoc = gl.getUniformLocation(program, 'u_resolution');
+const timeLoc = gl.getUniformLocation(program, 'u_time');
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+function render(now) {
+  gl.uniform2f(resLoc, canvas.width, canvas.height);
+  gl.uniform1f(timeLoc, now * 0.001);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
